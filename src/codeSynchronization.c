@@ -24,8 +24,18 @@
  * questions.
  */
 
-void codeSynchronization_clearCache(long unsigned codeStart, long unsigned codeSize){
-    long unsigned  codeEnd = codeStart + codeSize;
+#ifdef _WIN32
+    #include <windows.h>
+#else
+    #include <unistd.h>
+#endif
+
+void codeSynchronization_clearCache(unsigned long codeStart, unsigned long codeSize){
+    unsigned long codeEnd = codeStart + codeSize;
+#ifdef _WIN32 // TODO: verify windows version
+    FlushInstructionCache(GetCurrentProcess(), (LPCVOID)codeStart, (SIZE_T)(codeEnd - codeStart));
+#else
     __builtin___clear_cache((char *) codeStart, (char *) codeEnd);
+#endif
 }
 

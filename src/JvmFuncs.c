@@ -24,22 +24,28 @@
  */
 
 /* JVM_ functions imported from the hotspot sources */
-
+// TODO:
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdint.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#define socklen_t int
+#else
 #include <unistd.h>
-#include <stdlib.h>
 #include <sys/socket.h>
 #include <poll.h>
 #include <netdb.h>
-#include <errno.h>
 #include <dlfcn.h>
-#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
-#include <limits.h>
 #include <sched.h>
+#endif
+#include <stdlib.h>
+#include <errno.h>
+#include <string.h>
+#include <limits.h>
 
 #include <jni.h>
 
@@ -53,7 +59,9 @@ extern int __svm_vm_is_static_binary;
     function in turn calls dlsym, which is a bad idea in a static binary.
     This header provides that symbol, allowing us to return its address through JVM_FindLibraryEntry.
 */
+#ifndef _WIN32 // TODO: according to the comment above, this should not be needed on Windows?
 #include <arpa/inet.h>
+#endif
 
 #ifdef JNI_VERSION_9
     #define JVM_INTERFACE_VERSION 6
@@ -153,13 +161,31 @@ static int linux_active_processor_count() {
 JNIEXPORT int JNICALL JVM_ActiveProcessorCount() {
 #if defined(__linux__) && !defined(ANDROID)
     return linux_active_processor_count();
+#elif defined(_WIN32)
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    return sysinfo.dwNumberOfProcessors;
 #else
     return sysconf(_SC_NPROCESSORS_ONLN);
 #endif
 }
 
 JNIEXPORT int JNICALL JVM_Connect(int fd, struct sockaddr* him, socklen_t len) {
+#ifdef _WIN32 // TODO: restartable?
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return -1;
+    }
+    SOCKET s = (SOCKET)fd;
+    if(connect(s, him, len) != 0) {
+        WSACleanup();
+        return -1;
+    }
+    WSACleanup();
+    return 0;
+#else
     RESTARTABLE_RETURN_INT(connect(fd, him, len));
+#endif
 }
 
 JNIEXPORT void* JNICALL JVM_FindLibraryEntry(void* handle, const char* name) {
@@ -172,14 +198,21 @@ JNIEXPORT void* JNICALL JVM_FindLibraryEntry(void* handle, const char* name) {
         static binary with an unknown symbol terminates the program.
     */
     if (__svm_vm_is_static_binary) {
+#ifndef _WIN32 // TODO: according to the comment above this should not be needed on Windows?
         if (strcmp(name, "inet_pton") == 0) {
             return inet_pton;
         }
+#endif
         fprintf(stderr, "Internal error: JVM_FindLibraryEntry called from a static native image with symbol: %s. Results may be unpredictable. Please report this issue to the SubstrateVM team.", name);
         fflush(stderr);
         exit(1);
     } else {
+#ifdef _WIN32
+        // TODO: is the handle a reference to a `dlopen` call?
+        return GetProcAddress((HMODULE)handle, name);
+#else
         return dlsym(handle, name);
+#endif
     }
 }
 
@@ -219,13 +252,22 @@ JNIEXPORT int JNICALL JVM_SocketAvailable(int fd, int *pbytes) {
     if (fd < 0)
         return OS_OK;
 
-    RESTARTABLE(ioctl(fd, FIONREAD, pbytes), ret);
-
+#ifdef _WIN32
+    unsigned long bytes = 0;
+    ret = ioctlsocket(fd, FIONREAD, &bytes);
+    *pbytes = (int)bytes;
     return (ret == OS_ERR) ? 0 : 1;
+#else
+    RESTARTABLE(ioctl(fd, FIONREAD, pbytes), ret);
+#endif
 }
 
 JNIEXPORT int JNICALL JVM_SocketClose(int fd) {
+#ifdef _WIN32
+    return closesocket(fd);
+#else
     return close(fd);
+#endif
 }
 
 JNIEXPORT int JNICALL JVM_SocketShutdown(int fd, int howto) {
@@ -237,7 +279,59 @@ JNIEXPORT int JNICALL JVM_InitializeSocketLibrary() {
     /* A noop, returns 0 in hotspot */
    return 0;
 }
+#ifdef _WIN32 // TODO: cobbled together from snippets. verify that these work correctly!
+JNIEXPORT jlong JNICALL Java_java_lang_System_currentTimeMillis(void *env, void * ignored) {
+    FILETIME filetime;
+    GetSystemTimeAsFileTime(&filetime);
 
+    ULARGE_INTEGER largeInt;
+    largeInt.LowPart = filetime.dwLowDateTime;
+    largeInt.HighPart = filetime.dwHighDateTime;
+
+    jlong time = (jlong)largeInt.QuadPart / 10000; // convert from 100-nanosecond intervals to milliseconds
+    time -= 11644473600000LL; // adjust for the epoch difference between 1601 and 1970
+
+    return time;
+}
+
+JNIEXPORT jlong JNICALL Java_java_lang_System_nanoTime(void *env, void * ignored) {
+    LARGE_INTEGER frequency, counter;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&counter);
+
+    jlong time = (jlong)counter.QuadPart * 1000000000 / frequency.QuadPart;
+
+    return time;
+}
+
+JNIEXPORT jlong JNICALL JVM_CurrentTimeMillis(void *env, void * ignored) {
+    return Java_java_lang_System_currentTimeMillis(env, ignored);
+}
+
+JNIEXPORT jlong JNICALL JVM_NanoTime(void *env, void * ignored) {
+    return Java_java_lang_System_nanoTime(env, ignored);
+}
+
+JNIEXPORT jlong JNICALL JVM_GetNanoTimeAdjustment(void *env, void * ignored, jlong offset_secs) {
+    LARGE_INTEGER frequency, counter;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&counter);
+
+    jlong time = (jlong)counter.QuadPart * 1000000000 / frequency.QuadPart;
+
+    int64_t seconds = time / 1000000000;
+    int64_t nanos = time % 1000000000;
+    int64_t maxDiffSecs = 0x0100000000LL;
+    int64_t minDiffSecs = -maxDiffSecs;
+
+    int64_t diff = seconds - offset_secs;
+    if (diff >= maxDiffSecs || diff <= minDiffSecs) {
+        return -1;
+    }
+
+    return diff * 1000000000LL + nanos;
+}
+#else
 JNIEXPORT jlong JNICALL Java_java_lang_System_currentTimeMillis(void *env, void * ignored) {
     struct timeval time;
     int status = gettimeofday(&time, NULL);
@@ -275,6 +369,7 @@ JNIEXPORT jlong JNICALL JVM_GetNanoTimeAdjustment(void *env, void * ignored, jlo
     }
     return diff * 1000000000LL + nanos;
 }
+#endif
 
 JNIEXPORT jlong JNICALL Java_jdk_internal_misc_VM_getNanoTimeAdjustment(void *env, void * ignored, jlong offset_secs) {
     return JVM_GetNanoTimeAdjustment(env, ignored, offset_secs);

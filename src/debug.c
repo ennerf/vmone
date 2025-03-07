@@ -1,3 +1,5 @@
+#ifndef _WIN32 // TODO: is this required for Window debugging as well?
+
 #include <stdio.h>
 #include <sys/mman.h>
 void* mymmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
@@ -23,3 +25,5 @@ void* myprint(void *addr) {
 void* myprinti(int val) {
     fprintf(stderr, "PRINT intval: %d\n", val);
 }
+
+#endif // _WIN32

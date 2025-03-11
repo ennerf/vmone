@@ -52,14 +52,15 @@
 #define OS_OK 0
 #define OS_ERR -1
 
+#ifndef _WIN32
 /* Set by native-image during image build time. Indicates whether the built image is a static binary. */
-extern int __svm_vm_is_static_binary;
+extern int __svm_vm_is_static_binary; // Note: not specified on Windows
+
 /*
     The way JDK checks IPv6 support on Linux involves checking if inet_pton exists using JVM_FindLibraryEntry. That
     function in turn calls dlsym, which is a bad idea in a static binary.
     This header provides that symbol, allowing us to return its address through JVM_FindLibraryEntry.
 */
-#ifndef _WIN32 // TODO: according to the comment above, this should not be needed on Windows?
 #include <arpa/inet.h>
 #endif
 
@@ -197,23 +198,25 @@ JNIEXPORT void* JNICALL JVM_FindLibraryEntry(void* handle, const char* name) {
         a dependency on another symbol, it could result in hard-to-find bugs. Therefore, calling this function from a
         static binary with an unknown symbol terminates the program.
     */
+#ifndef _WIN32
     if (__svm_vm_is_static_binary) {
-#ifndef _WIN32 // TODO: according to the comment above this should not be needed on Windows?
         if (strcmp(name, "inet_pton") == 0) {
             return inet_pton;
         }
-#endif
         fprintf(stderr, "Internal error: JVM_FindLibraryEntry called from a static native image with symbol: %s. Results may be unpredictable. Please report this issue to the SubstrateVM team.", name);
         fflush(stderr);
         exit(1);
     } else {
-#ifdef _WIN32
-        // TODO: is the handle a reference to a `dlopen` call?
-        return GetProcAddress((HMODULE)handle, name);
-#else
         return dlsym(handle, name);
-#endif
     }
+#else
+    // Note: Windows does not define __svm_vm_is_static_binary, and according
+    // to the comment above, inet_pton should not be needed either. For now we
+    // assume that this method never needs to be called.
+    fprintf(stderr, "Internal error: JVM_FindLibraryEntry called from a static native image with symbol: %s. Results may be unpredictable. Please report this issue to the SubstrateVM team.", name);
+    fflush(stderr);
+    exit(1);
+#endif
 }
 
 JNIEXPORT int JNICALL JVM_GetHostName(char* name, int namelen) {

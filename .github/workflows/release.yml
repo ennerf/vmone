@@ -122,28 +122,24 @@ jobs:
           retention-days: 1
 
   build-windows-x64:
-    if: false
     runs-on: windows-latest
     steps:
       - name: 'Checkout the JDK source'
         uses: actions/checkout@v4
-      - name: 'Download libjdk.lib'
-        uses: robinraju/release-downloader@v1
-        with:
-          repository: 'gluonhq/mobile'
-          latest: true
-          fileName: 'windows-x64.zip'
+      - uses: ilammy/msvc-dev-cmd@v1
       - name: 'Build'
+        shell: cmd
         run: |
-          powershell -Command "Expand-Archive -Path windows-x64.zip -DestinationPath C:\temp\"
-          powershell -Command "Move-Item -Path C:\temp\windows-x64\libjdk.lib -Destination C:\temp\"
-          cd C:\temp
-          make clean all
+          md build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -G "NMake Makefiles"
+          nmake 
+          cd ..
       - name: 'Upload static image artifact'
         uses: actions/upload-artifact@v4
         with:
           name: vmone-windows-x64
-          path: C:\temp\lib\windows\x64\staticjdk\lib\
+          path: build\lib
           retention-days: 1
 
   build-windows-aarch64:
@@ -176,7 +172,7 @@ jobs:
         build-android, build-ios,
         build-linux-x64,
         build-macos-x64, build-macos-aarch64,
-        # build-windows-x64, build-windows-aarch64
+        build-windows-x64 #, build-windows-aarch64
     ]
     runs-on: ubuntu-22.04
     steps:
@@ -215,7 +211,6 @@ jobs:
         with:
           name: vmone-windows-x64
           path: ./dist/windows-x64/lib/
-        if: false
 
       - name: Download windows aarch64 artifacts
         uses: actions/download-artifact@v4
@@ -236,8 +231,8 @@ jobs:
           zip -r ../vmone-macos-x64.zip lib/
           cd $GITHUB_WORKSPACE/dist/macos-aarch64/
           zip -r ../vmone-macos-aarch64.zip lib/
-          # cd $GITHUB_WORKSPACE/dist/windows-x64/
-          # zip -r ../vmone-windows-x64.zip lib/
+          cd $GITHUB_WORKSPACE/dist/windows-x64/
+          zip -r ../vmone-windows-x64.zip lib/
           # cd $GITHUB_WORKSPACE/dist/windows-aarch64/
           # zip -r ../vmone-windows-aarch64.zip lib/
 

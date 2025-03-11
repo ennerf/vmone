@@ -136,7 +136,7 @@ elseif (WIN32) # Note: for MSVC. MSYS would use 'ar' instead
         message(FATAL_ERROR "Windows builds assume MSVC. MSYS would need to change to use 'ar', similar to unix.")
     endif()
     add_custom_command(TARGET vmone POST_BUILD
-            COMMAND lib /OUT:${DIST_DIR}/libvmone.lib
+            COMMAND lib /OUT:${DIST_DIR}/vmone.lib
             ${LIBJDK_DIR}/${DISTRIBUTION_NAME}/libjdk.lib
             $<TARGET_FILE:vmone>
             COMMENT "Creating combined static library for Windows at ${DIST_DIR}/libvmone.lib"
